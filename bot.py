@@ -16,14 +16,14 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
 PREFIX = os.getenv('PREFIX', '!')  # Default prefix is ! but can be changed
 
-# Initialize bot with prefix
+# Initialize bot with prefix and remove default help command
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)  # Remove default help
 
 # Initialize ElevenLabs client
 eleven_client = None
@@ -36,16 +36,16 @@ voice_channels = {}
 
 @bot.event
 async def on_ready():
-    print(f'👉{bot.user} is online and ready!')
-    print(f'👉Bot ID: {bot.user.id}')
-    print(f'👉Connected to {len(bot.guilds)} guilds')
-    print(f'👉Command Prefix: {PREFIX}')
+    print(f'🔹{bot.user} is online and ready!')
+    print(f'🔹Bot ID: {bot.user.id}')
+    print(f'🔹Connected to {len(bot.guilds)} guilds')
+    print(f'🔹Command Prefix: {PREFIX}')
     
     # Set bot status
-  #  await bot.change_presence(activity=discord.Activity(
-     #   type=discord.ActivityType.listening, 
-    #    name=f"{PREFIX}help for commands"
-  #  ))
+    await bot.change_presence(activity=discord.Activity(
+        type=discord.ActivityType.listening, 
+        name=f"{PREFIX}help for commands"
+    ))
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -99,9 +99,10 @@ async def play_greeting(guild_id, text):
         # Convert generator to bytes
         audio_bytes = b''.join(audio_generator)
         
-        # Save audio to BytesIO
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.seek(0)
+        # Save temp file and create audio source
+        temp_file = f"temp_audio_{guild_id}.mp3"
+        with open(temp_file, "wb") as f:
+            f.write(audio_bytes)
         
         # Play audio in voice channel
         if guild_id in voice_clients:
@@ -109,11 +110,6 @@ async def play_greeting(guild_id, text):
             
             if vc.is_playing():
                 vc.stop()
-            
-            # Save temp file and create audio source
-            temp_file = f"temp_audio_{guild_id}.mp3"
-            with open(temp_file, "wb") as f:
-                f.write(audio_bytes)
             
             # Create audio source from file
             source = discord.FFmpegPCMAudio(temp_file)
@@ -165,8 +161,8 @@ async def join_vc(ctx, channel_id: int = None):
         voice_clients[ctx.guild.id] = vc
         voice_channels[channel.id] = channel.name
         
-        await ctx.send(f"✅ Joined voice channel: **{channel.name}**")
-        print(f"🎙️ Bot joined VC: {channel.name} in {ctx.guild.name}")
+        await ctx.send(f"Joined voice channel: **{channel.name}**")
+        print(f"Bot joined VC: {channel.name} in {ctx.guild.name}")
         
     except Exception as e:
         await ctx.send(f"❌ Error joining VC: {str(e)}")
@@ -195,7 +191,7 @@ async def check_voice(ctx):
     """Check if bot voice is working"""
     try:
         if ctx.guild.id not in voice_clients:
-            await ctx.send("❌ I'm not in any voice channel! Use {0}vc to join one.".format(PREFIX))
+            await ctx.send(f"❌ I'm not in any voice channel! Use {PREFIX}vc to join one.")
             return
         
         # Get the author's name
@@ -230,37 +226,37 @@ async def check_api(ctx):
         )
         
         embed.add_field(
-            name="v4.1",
-            value="Fine",
+            name="``Api Version``",
+            value="1.5.89",
             inline=True
         )
         
         embed.add_field(
-            name="User",
+            name="``User``",
             value=f"{user_info.first_name} {user_info.last_name or ''}",
             inline=True
         )
         
         embed.add_field(
-            name="Email",
-            value=user_info.email or "||Private Cannot Show||",
+            name="``Email``",
+            value=user_info.email or "N/A",
             inline=True
         )
         
         embed.add_field(
-            name="Subscription",
+            name="``Subscription``",
             value=f"Tier: {user_info.subscription.tier}\nStatus: {user_info.subscription.status}",
             inline=True
         )
         
         embed.add_field(
-            name="Characters Used",
+            name="``Characters Used``",
             value=f"{user_info.subscription.character_count}/{user_info.subscription.character_limit}",
             inline=True
         )
         
         embed.add_field(
-            name="Voices Available",
+            name="``Voices Available``",
             value=f"{user_info.subscription.voice_limit} voices",
             inline=True
         )
@@ -327,7 +323,7 @@ async def change_prefix(ctx, new_prefix: str):
     PREFIX = new_prefix
     bot.command_prefix = new_prefix
     
-    await ctx.send(f"✅ Prefix changed from `{old_prefix}` to `{new_prefix}`")
+    await ctx.send(f"Prefix changed from `{old_prefix}` to `{new_prefix}`")
 
 # Error handling
 @bot.event
