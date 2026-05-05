@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-from elevenlabs import ElevenLabs, VoiceSettings
+from elevenlabs.client import ElevenLabs
+from elevenlabs import VoiceSettings
 import asyncio
 import io
 import datetime
@@ -13,6 +14,7 @@ load_dotenv()
 # Bot configuration
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+PREFIX = os.getenv('PREFIX', '!')  # Default prefix is ! but can be changed
 
 # Initialize bot with prefix
 intents = discord.Intents.default()
@@ -21,7 +23,7 @@ intents.voice_states = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='*', intents=intents)
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 # Initialize ElevenLabs client
 eleven_client = None
@@ -34,14 +36,15 @@ voice_channels = {}
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} is online and ready!')
-    print(f'Bot ID: {bot.user.id}')
-    print(f'Connected to {len(bot.guilds)} guilds')
+    print(f'👉{bot.user} is online and ready!')
+    print(f'👉Bot ID: {bot.user.id}')
+    print(f'👉Connected to {len(bot.guilds)} guilds')
+    print(f'👉Command Prefix: {PREFIX}')
     
     # Set bot status
-   # await bot.change_presence(activity=discord.Activity(
+  #  await bot.change_presence(activity=discord.Activity(
      #   type=discord.ActivityType.listening, 
-  #      name="!help for commands"
+    #    name=f"{PREFIX}help for commands"
   #  ))
 
 @bot.event
@@ -70,17 +73,17 @@ async def on_voice_state_update(member, before, after):
                 print(f"Greeting: {greeting_text}")
                 
                 # Play greeting using ElevenLabs
-                await play_greeting(guild_id, greeting_text, after.channel)
+                await play_greeting(guild_id, greeting_text)
 
-async def play_greeting(guild_id, text, voice_channel):
+async def play_greeting(guild_id, text):
     """Generate and play greeting using ElevenLabs API"""
     try:
         if not eleven_client:
             print("❌ ElevenLabs client not initialized")
             return
         
-        # Generate audio from text
-        audio_stream = eleven_client.text_to_speech.convert(
+        # Generate audio from text using new SDK
+        audio_generator = eleven_client.text_to_speech.convert(
             voice_id="21m00Tcm4TlvDq8ikWAM",  # Default ElevenLabs voice (Rachel)
             output_format="mp3_44100_128",
             text=text,
@@ -94,7 +97,7 @@ async def play_greeting(guild_id, text, voice_channel):
         )
         
         # Convert generator to bytes
-        audio_bytes = b''.join(audio_stream)
+        audio_bytes = b''.join(audio_generator)
         
         # Save audio to BytesIO
         audio_file = io.BytesIO(audio_bytes)
@@ -107,21 +110,32 @@ async def play_greeting(guild_id, text, voice_channel):
             if vc.is_playing():
                 vc.stop()
             
-            # Convert to PCM AudioSource
-            source = discord.FFmpegPCMAudio(audio_file, pipe=True)
+            # Save temp file and create audio source
+            temp_file = f"temp_audio_{guild_id}.mp3"
+            with open(temp_file, "wb") as f:
+                f.write(audio_bytes)
             
-            # Adjust volume if needed
+            # Create audio source from file
+            source = discord.FFmpegPCMAudio(temp_file)
             source = discord.PCMVolumeTransformer(source)
             source.volume = 1.0
             
-            vc.play(source)
+            vc.play(source, after=lambda e: cleanup_temp_file(temp_file))
             
     except Exception as e:
         print(f"❌ Error playing greeting: {e}")
 
+def cleanup_temp_file(file_path):
+    """Clean up temporary audio files"""
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except:
+        pass
+
 @bot.command(name='vc')
 async def join_vc(ctx, channel_id: int = None):
-    """Join a voice channel by ID (!vc <channel_id>)"""
+    """Join a voice channel by ID"""
     try:
         # Get the voice channel
         if channel_id:
@@ -154,33 +168,13 @@ async def join_vc(ctx, channel_id: int = None):
         await ctx.send(f"✅ Joined voice channel: **{channel.name}**")
         print(f"🎙️ Bot joined VC: {channel.name} in {ctx.guild.name}")
         
-        # Start the 24/7 stay alive loop
-        asyncio.create_task(stay_alive_loop(ctx.guild.id))
-        
     except Exception as e:
         await ctx.send(f"❌ Error joining VC: {str(e)}")
         print(f"❌ Error: {e}")
 
-async def stay_alive_loop(guild_id):
-    """Keep the bot alive in voice channel"""
-    try:
-        while guild_id in voice_clients:
-            vc = voice_clients[guild_id]
-            
-            # Check if bot is still connected
-            if not vc.is_connected():
-                print(f"⚠️ Bot disconnected from VC in guild {guild_id}")
-                del voice_clients[guild_id]
-                break
-            
-            # Wait before checking again
-            await asyncio.sleep(60)
-    except Exception as e:
-        print(f"❌ Error in stay alive loop: {e}")
-
 @bot.command(name='dvc')
 async def leave_vc(ctx):
-    """Leave the current voice channel (!dvc)"""
+    """Leave the current voice channel"""
     try:
         if ctx.guild.id in voice_clients:
             vc = voice_clients[ctx.guild.id]
@@ -189,8 +183,8 @@ async def leave_vc(ctx):
             await vc.disconnect()
             del voice_clients[ctx.guild.id]
             
-            await ctx.send(f"✅ Left voice channel: **{channel_name}**")
-            print(f"👋 Bot left VC: {channel_name} in {ctx.guild.name}")
+            await ctx.send(f"Left voice channel: **{channel_name}**")
+            print(f"Bot left VC: {channel_name} in {ctx.guild.name}")
         else:
             await ctx.send("❌ I'm not in any voice channel!")
     except Exception as e:
@@ -198,10 +192,10 @@ async def leave_vc(ctx):
 
 @bot.command(name='cv')
 async def check_voice(ctx):
-    """Check if bot voice is working (!cv)"""
+    """Check if bot voice is working"""
     try:
         if ctx.guild.id not in voice_clients:
-            await ctx.send("❌ I'm not in any voice channel! Use !vc to join one.")
+            await ctx.send("❌ I'm not in any voice channel! Use {0}vc to join one.".format(PREFIX))
             return
         
         # Get the author's name
@@ -213,14 +207,14 @@ async def check_voice(ctx):
         await ctx.send(f"Playing voice test in VC...")
         
         # Play test message
-        await play_greeting(ctx.guild.id, test_text, voice_clients[ctx.guild.id].channel)
+        await play_greeting(ctx.guild.id, test_text)
         
     except Exception as e:
         await ctx.send(f"❌ Error checking voice: {str(e)}")
 
 @bot.command(name='api')
 async def check_api(ctx):
-    """Check ElevenLabs API status (!api)"""
+    """Check ElevenLabs API status"""
     try:
         if not eleven_client:
             await ctx.send("❌ ElevenLabs client is not initialized. Check your API key.")
@@ -236,8 +230,8 @@ async def check_api(ctx):
         )
         
         embed.add_field(
-            name="Status",
-            value="Fine!",
+            name="v4.1",
+            value="Fine",
             inline=True
         )
         
@@ -249,7 +243,7 @@ async def check_api(ctx):
         
         embed.add_field(
             name="Email",
-            value=user_info.email or "N/A",
+            value=user_info.email or "||Private Cannot Show||",
             inline=True
         )
         
@@ -271,7 +265,7 @@ async def check_api(ctx):
             inline=True
         )
         
-        embed.set_footer(text="ElevenLabs API • Bot by SUBHAN")
+        embed.set_footer(text="ElevenLabs API")
         
         await ctx.send(embed=embed)
         
@@ -285,19 +279,19 @@ async def check_api(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    """Show all bot commands (!help)"""
+    """Show all bot commands"""
     embed = discord.Embed(
         title="Voice Bot Commands",
-        description="Here are all available commands:",
+        description=f"Prefix: `{PREFIX}`\nHere are all available commands:",
         color=discord.Color.blue()
     )
     
     commands_list = {
-        "{prefix}vc <channel_id>": "Join a voice channel by ID. Bot will stay 24/7",
-        "*dvc": "Leave the current voice channel",
-        "*cv": "Check if bot voice is working (test command)",
-        "*api": "Show ElevenLabs API status and details",
-        "*help": "Show this help message"
+        f"{PREFIX}vc <channel_id>": "Join a voice channel by ID. Bot will stay 24/7",
+        f"{PREFIX}dvc": "Leave the current voice channel",
+        f"{PREFIX}cv": "Check if bot voice is working (test command)",
+        f"{PREFIX}api": "Show ElevenLabs API status and details",
+        f"{PREFIX}help": "Show this help message"
     }
     
     for cmd, desc in commands_list.items():
@@ -316,22 +310,30 @@ async def help_command(ctx):
         inline=False
     )
     
-    embed.set_footer(text="Prefix: {prefix} • Use commands in any text channel")
+    embed.set_footer(text=f"Prefix: {PREFIX} • Use commands in any text channel")
     
     await ctx.send(embed=embed)
 
-@bot.command(name='guilds')
-@commands.is_owner()
-async def show_guilds(ctx):
-    """Show all guilds the bot is in (Owner only)"""
-    guild_list = "\n".join([f"• {guild.name} (ID: {guild.id})" for guild in bot.guilds])
-    await ctx.send(f"**Connected to {len(bot.guilds)} guilds:**\n{guild_list}")
+@bot.command(name='prefix')
+@commands.has_permissions(administrator=True)
+async def change_prefix(ctx, new_prefix: str):
+    """Change the bot prefix (Admin only)"""
+    if len(new_prefix) > 5:
+        await ctx.send("❌ Prefix must be 5 characters or less!")
+        return
+    
+    global PREFIX
+    old_prefix = PREFIX
+    PREFIX = new_prefix
+    bot.command_prefix = new_prefix
+    
+    await ctx.send(f"✅ Prefix changed from `{old_prefix}` to `{new_prefix}`")
 
 # Error handling
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        await ctx.send("❌ Command not found! Use `!help` to see available commands.")
+        await ctx.send(f"❌ Command not found! Use `{PREFIX}help` to see available commands.")
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You don't have permission to use this command!")
     else:
@@ -343,5 +345,5 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         print("❌ Discord token not found! Check your .env file.")
     else:
-        print("🚀 Starting bot...")
+        print(f"🚀 Starting bot with prefix: {PREFIX}")
         bot.run(DISCORD_TOKEN)
